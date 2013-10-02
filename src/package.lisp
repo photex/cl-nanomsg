@@ -10,4 +10,5 @@
   (:import-from :cffi
                 #:mem-ref #:with-foreign-objects #:with-foreign-object
                 #:foreign-alloc #:foreign-free #:null-pointer-p)
-  (:export #:make-socket))
+  (:export #:make-socket
+           #:close-socket))
