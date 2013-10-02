@@ -13,4 +13,6 @@
                 #:foreign-alloc #:foreign-free #:null-pointer-p)
   (:export #:make-socket
            #:close-socket
-           #:set-socket-options))
+           #:set-socket-options
+           #:errno
+           #:strerror))
