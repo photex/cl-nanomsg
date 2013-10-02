@@ -35,3 +35,11 @@
 
 (defun close-socket (socket)
   (check-zero (nn-close socket)))
+
+(defun set-socket-options (socket level option value)
+  (etypecase value
+    (string (with-foreign-string (str value)
+              (nn-setsockopt socket level option str (length value))))
+    (integer (with-foreign-object (int :int64)
+               (setf (mem-ref int :int64) value)
+               (nn-setsockopt socket level option int (foreign-type-size :int64))))))

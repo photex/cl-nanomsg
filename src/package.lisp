@@ -9,6 +9,8 @@
         #:nanomsg-ffi.accessors #:nanomsg-ffi.functions)
   (:import-from :cffi
                 #:mem-ref #:with-foreign-objects #:with-foreign-object
+                #:with-foreign-string #:foreign-type-size
                 #:foreign-alloc #:foreign-free #:null-pointer-p)
   (:export #:make-socket
-           #:close-socket))
+           #:close-socket
+           #:set-socket-options))
