@@ -5,7 +5,7 @@
 
 (cffi:defcvar "errno" :int64)
 
-(defcfun ("memcpy" memcpy) :pointer
+(cffi:defcfun ("memcpy" memcpy) :pointer
   (dst :pointer)
   (src :pointer)
   (len :long))
@@ -118,6 +118,9 @@
     (declare (ignore _))
     (format nil "(~A) ~a" errnum msg)))
 
+(defmacro term ()
+  `(nn-term))
+
 (defmacro make-socket (domain protocol)
   (with-gensyms (sock d p)
     `(let ((,d (domain-constant ,domain))
@@ -201,3 +204,15 @@ previous bind or connect) otherwise it should be an endpoint address (for exampl
 
 (defun shutdown (socket eid)
   (%config-endpoint :shutdown socket eid))
+
+(defun alloc-msg (size)
+  (let ((msg (nn-allocmsg size 0)))
+    (when (null-pointer-p msg)
+      (error 'nanomsg-error :msg (strerror (errno))))
+    msg))
+
+(defun free-msg (msg)
+  (let ((rc (nn-freemsg msg)))
+    (when (< rc 0)
+      (error 'nanomsg-error :msg (strerror (errno))))
+    rc))

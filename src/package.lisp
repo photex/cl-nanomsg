@@ -16,6 +16,7 @@
            ;; constants
            #:+sockaddrmax+
            ;; api
+           #:term
            #:make-socket
            #:close-socket
            #:set-socket-option
@@ -23,4 +24,6 @@
            #:bind
            #:connect
            #:shutdown
+           #:alloc-msg
+           #:free-msg
            ))
