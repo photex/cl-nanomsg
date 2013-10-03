@@ -91,7 +91,7 @@
 (defun strerror (errnum)
   (multiple-value-bind (msg _) (nn-strerror errnum)
     (declare (ignore _))
-    msg))
+    (format nil "(~A) ~a" errnum msg)))
 
 (defmacro make-socket (domain protocol)
   (with-gensyms (sock d p)
@@ -112,12 +112,21 @@
        (unless (= 0 ,rc)
          (error 'nanomsg-error :msg (strerror (errno)))))))
 
+(defmacro with-sockopt-alloc ((value vname vtype) &body forms)
+  (case vtype
+    (:string `(with-foreign-string (,vname ,value) ,@forms))
+    (t `(autowrap:with-alloc (,vname ,vtype)
+          (setf (mem-ref ,vname ,vtype) ,value)
+          ,@forms))))
+
 (defmacro set-socket-option (socket level option value)
-  (let ((val-type (etypecase value (string :string) (integer :int))))
+  (let* ((val-type (etypecase value (string :string) (integer :int))))
     (with-gensyms (rc opt lev val len)
-      `(autowrap:with-alloc (,val ,val-type)
+      `(with-sockopt-alloc (,value ,val ,val-type)
          (setf (mem-ref ,val ,val-type) ,value)
-         (let* ((,len ,(etypecase value (string (length value)) (integer (foreign-type-size :int))))
+         (let* ((,len ,(etypecase value
+                          (string (length value))
+                          (integer (foreign-type-size :int))))
                 (,opt (sockopt-constant ,option))
                 (,lev (sockopt-level-constant ,level))
                 (,rc (nn-setsockopt ,socket ,lev ,opt ,val ,len)))
@@ -133,4 +142,8 @@
               (,rc (nn-getsockopt ,socket ,lev ,opt ,val ,len)))
          (unless (= ,rc 0)
            (error 'nanomsg-error :msg (strerror (errno))))
-         (mem-ref ,val ,val-type)))))
+         ,(case val-type
+                (:string `(if (null-pointer-p ,val)
+                              nil
+                              (cffi:foreign-string-to-lisp ,val)))
+                (t `(mem-ref ,val ,val-type)))))))
