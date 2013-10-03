@@ -1,12 +1,14 @@
 (in-package #:nanomsg)
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; CFFI schtuff
+
 (cffi:defcvar "errno" :int64)
 
-(define-condition nanomsg-error (error)
-  ((err-msg :initarg :msg :initform nil :accessor err-msg))
-  (:report (lambda (c s)
-             (with-slots (err-msg) c
-               (format s "NANOMSG Error: ~A" err-msg)))))
+(defcfun ("memcpy" memcpy) :pointer
+  (dst :pointer)
+  (src :pointer)
+  (len :long))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; utils
@@ -61,11 +63,20 @@
     (:tcp-nodelay nanomsg-ffi:+nn-tcp-nodelay+)
     (t -1)))
 
+(defun sockopt-type (option)
+  (case option
+    (:subscribe :string)
+    (:unsubscribe :string)
+    (t :int)))
+
 (defmacro sockopt-level-constant (level)
   (with-gensyms (result)
-    `(let ((,result (when (eq :sol-socket ,level)
-                      nanomsg-ffi:+nn-sol-socket+)))
-       (unless ,result
+    `(let ((,result (case ,level
+                      (:sol-socket nanomsg-ffi:+nn-sol-socket+)
+                      (:domain nanomsg-ffi:+nn-domain+)
+                      (:protocol nanomsg-ffi:+nn-protocol+)
+                      (t -1))))
+       (when (= ,result -1)
          (setf ,result (protocol-constant ,level))
          (when (= ,result -1)
            (setf ,result (transport-constant ,level))))
@@ -80,6 +91,20 @@
                 (setf (mem-ref optval :int64) ,v)
                 (let ((,optval-length (foreign-type-size :int64)))
                   ,@forms)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; constants
+
+(defconstant +sockaddrmax+ nanomsg-ffi:+nn-sockaddr-max+)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; conditions
+
+(define-condition nanomsg-error (error)
+  ((err-msg :initarg :msg :initform nil :accessor err-msg))
+  (:report (lambda (c s)
+             (with-slots (err-msg) c
+               (format s "NANOMSG Error: ~A" err-msg)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; API
@@ -120,30 +145,59 @@
           ,@forms))))
 
 (defmacro set-socket-option (socket level option value)
-  (let* ((val-type (etypecase value (string :string) (integer :int))))
+  (let* ((val-type (sockopt-type option)))
     (with-gensyms (rc opt lev val len)
       `(with-sockopt-alloc (,value ,val ,val-type)
          (setf (mem-ref ,val ,val-type) ,value)
-         (let* ((,len ,(etypecase value
-                          (string (length value))
-                          (integer (foreign-type-size :int))))
+         (let* ((,len ,(case val-type
+                          (:string (length value))
+                          (:int (foreign-type-size :int))))
                 (,opt (sockopt-constant ,option))
                 (,lev (sockopt-level-constant ,level))
                 (,rc (nn-setsockopt ,socket ,lev ,opt ,val ,len)))
            (unless (= ,rc 0)
              (error 'nanomsg-error :msg (strerror (errno)))))))))
 
-(defmacro get-socket-option (socket level option val-type)
-  (with-gensyms (rc opt lev val len)
-    `(with-foreign-objects ((,val ,val-type)
-                            (,len :int))
-       (let* ((,opt (sockopt-constant ,option))
-              (,lev (sockopt-level-constant ,level))
-              (,rc (nn-getsockopt ,socket ,lev ,opt ,val ,len)))
-         (unless (= ,rc 0)
-           (error 'nanomsg-error :msg (strerror (errno))))
-         ,(case val-type
-                (:string `(if (null-pointer-p ,val)
-                              nil
-                              (cffi:foreign-string-to-lisp ,val)))
-                (t `(mem-ref ,val ,val-type)))))))
+(defmacro get-socket-option (socket level option)
+  (let ((val-type (sockopt-type option)))
+    (with-gensyms (rc opt lev val len)
+      `(with-foreign-objects ((,val ,val-type)
+                              (,len :int))
+         ;; TODO until the ability to get string options is implemented
+         ;; in nanomsg itself, we can't really test that aspect of this macro.
+         ;; So far, it appears that integer options are working.
+         ;; Unless I'm mistaken, the only string option you could query
+         ;; is :subscribe and getting options for the :sub protocol
+         ;; isn't implemented as of 0.2-alpha.
+         ,(when (eq val-type :string) `(setf (mem-ref ,len :int) 255))
+         (let* ((,opt (sockopt-constant ,option))
+                (,lev (sockopt-level-constant ,level))
+                (,rc (nn-getsockopt ,socket ,lev ,opt ,val ,len)))
+           (unless (= ,rc 0)
+             (error 'nanomsg-error :msg (strerror (errno))))
+           ,(case val-type
+                  (:string `(cffi:foreign-string-to-lisp ,val))
+                  (t `(mem-ref ,val ,val-type))))))))
+
+(defmacro %config-endpoint (type socket addr)
+  "Calls either bind, connect, or shutdown for a socket and address/endpoint.
+If the type is :shutdown, addr should be an endpoint id (ie the result of a 
+previous bind or connect) otherwise it should be an endpoint address (for example:
+\"tcp://eth0:1234\")."
+  (with-gensyms (eid)
+    `(let ((,eid ,(case type
+                     (:local `(nn-bind ,socket ,addr))
+                     (:remote `(nn-connect ,socket ,addr))
+                     (:shutdown `(nn-shutdown ,socket ,addr)))))
+       (when (< ,eid 0)
+         (error 'nanomsg-error :msg (strerror (errno))))
+       ,eid)))
+
+(defun bind (socket addr)
+  (%config-endpoint :local socket addr))
+
+(defun connect (socket addr)
+  (%config-endpoint :remote socket addr))
+
+(defun shutdown (socket eid)
+  (%config-endpoint :shutdown socket eid))

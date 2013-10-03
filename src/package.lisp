@@ -11,9 +11,16 @@
                 #:mem-ref #:with-foreign-objects #:with-foreign-object
                 #:with-foreign-string #:foreign-type-size
                 #:foreign-alloc #:foreign-free #:null-pointer-p)
-  (:export #:make-socket
+  (:export #:errno
+           #:strerror
+           ;; constants
+           #:+sockaddrmax+
+           ;; api
+           #:make-socket
            #:close-socket
            #:set-socket-option
            #:get-socket-option
-           #:errno
-           #:strerror))
+           #:bind
+           #:connect
+           #:shutdown
+           ))
