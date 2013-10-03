@@ -1,5 +1,7 @@
 (in-package #:nanomsg)
 
+(cffi:defcvar "errno" :int64)
+
 (define-condition nanomsg-error (error)
   ((err-msg :initarg :msg :initform nil :accessor err-msg))
   (:report (lambda (c s)
@@ -29,12 +31,59 @@
     (:bus nanomsg-ffi:+nn-bus+)
     (t -1)))
 
+(defmacro transport-constant (transport)
+  (case transport
+    (:tcp nanomsg-ffi:+nn-tcp+)
+    (:inproc nanomsg-ffi:+nn-inproc+)
+    (:ipc nanomsg-ffi:+nn-ipc+)
+    (t -1)))
+
 (defmacro sockopt-constant (option)
   (case option
-    (t 0)))
+    ;; :sol-socket options
+    (:linger nanomsg-ffi:+nn-linger+)
+    (:sndbuf nanomsg-ffi:+nn-sndbuf+)
+    (:rcvbuf nanomsg-ffi:+nn-rcvbuf+)
+    (:sndtimeo nanomsg-ffi:+nn-sndtimeo+)
+    (:rcvtimeo nanomsg-ffi:+nn-rcvtimeo+)
+    (:reconnect-ivl nanomsg-ffi:+nn-reconnect-ivl+)
+    (:reconnect-ivl-max nanomsg-ffi:+nn-reconnect-ivl-max+)
+    (:sndprio nanomsg-ffi:+nn-sndprio+)
+    (:ipv4only nanomsg-ffi:+nn-ipv4only+)
+    ;; :req socket options
+    (:req-resend-ivl nanomsg-ffi:+nn-req-resend-ivl+)
+    ;; :sub socket options
+    (:subscribe nanomsg-ffi:+nn-sub-subscribe+)
+    (:unsubscribe nanomsg-ffi:+nn-sub-unsubscribe+)
+    ;; :surveyor socket options
+    (:surveyor-deadline nanomsg-ffi:+nn-surveyor-deadline+)
+    ;; :tcp transport options
+    (:tcp-nodelay nanomsg-ffi:+nn-tcp-nodelay+)
+    (t -1)))
+
+(defmacro sockopt-level-constant (level)
+  (with-gensyms (result)
+    `(let ((,result (when (eq :sol-socket ,level)
+                      nanomsg-ffi:+nn-sol-socket+)))
+       (unless ,result
+         (setf ,result (protocol-constant ,level))
+         (when (= ,result -1)
+           (setf ,result (transport-constant ,level))))
+       ,result)))
+
+(defmacro with-sockopt-data ((v optval optval-length) &body forms)
+  (etypecase v
+    (string `(with-foreign-string (,optval ,v)
+               (let ((,optval-length (length ,v)))
+                 ,@forms)))
+    (integer `(with-foreign-object (,optval :int64)
+                (setf (mem-ref optval :int64) ,v)
+                (let ((,optval-length (foreign-type-size :int64)))
+                  ,@forms)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; api
+;; API
+;; Please refer to documentation.lisp for docstrings.
 
 (defun errno ()
   (nn-errno))
@@ -45,32 +94,6 @@
     msg))
 
 (defmacro make-socket (domain protocol)
-  "Creates an SP socket with specified domain and protocol. 
-Returns a file descriptor for the newly created socket.
-
-The following domains are defined at the moment:
-:sp - Standard full-blown SP socket
-:sp-raw - Raw SP socket.
-          Raw sockets omit the end-to-end functionality found in :sp sockets 
-          and thus can be used to implement intermediary devices in :sp topologies.
-
-The protocol parameter defines the type of the socket, which in turn determines the 
-exact semantics of the socket. 
-
-The following protocols are defined at the moment:
-:pub, :sub, :req, :rep, :pair, :surveyor, :respondent, :push, :pull, :bus
-
-Please refer to the nanomsg documentation for details on each protocol type.
-
-The newly created socket is initially not associated with any endpoints. 
-In order to establish a message flow at least one endpoint has to be added to the socket 
-using the nanomsg:bind or nanomsg:connect function.
-
-Also note that type argument as found in standard socket(2) function is omitted from nn_socket. 
-All the SP sockets are message-based and thus of SOCK_SEQPACKET type.
-
-If the function succeeds the file descriptor of the new socket is returned. 
-Otherwise a nanomsg-error condition is raised with an error message provided by nanomsg:strerror."
   (with-gensyms (sock d p)
     `(let ((,d (domain-constant ,domain))
            (,p (protocol-constant ,protocol)))
@@ -84,22 +107,22 @@ Otherwise a nanomsg-error condition is raised with an error message provided by 
          ,sock))))
 
 (defmacro close-socket (socket)
-  "Closes the socket. Any buffered inbound messages that were not yet received by the 
-application will be discarded. 
-The library will try to deliver any outstanding outbound messages for the time specified 
-by the :linger socket option. The call will block in the meantime."
   (with-gensyms (rc)
     `(let ((,rc (nn-close ,socket)))
        (unless (= 0 ,rc)
          (error 'nanomsg-error :msg (strerror (errno)))))))
 
-(defun set-socket-options (socket level option value)
-  (etypecase value
-    (string (with-foreign-string (str value)
-              (nn-setsockopt socket level option str (length value))))
-    (integer (with-foreign-object (int :int64)
-               (setf (mem-ref int :int64) value)
-               (nn-setsockopt socket level option int (foreign-type-size :int64))))))
+(defmacro set-socket-option (socket level option value)
+  (let ((val-type (etypecase value (string :string) (integer :int))))
+    (with-gensyms (rc opt lev val len)
+      `(autowrap:with-alloc (,val ,val-type)
+         (setf (mem-ref ,val ,val-type) ,value)
+         (let* ((,len ,(etypecase value (string (length value)) (integer (foreign-type-size :int))))
+                (,opt (sockopt-constant ,option))
+                (,lev (sockopt-level-constant ,level))
+                (,rc (nn-setsockopt ,socket ,lev ,opt ,val ,len)))
+           (unless (= ,rc 0)
+             (error 'nanomsg-error :msg (strerror (errno)))))))))
 
-
-
+(defmacro get-socket-option (socket option)
+  nil)

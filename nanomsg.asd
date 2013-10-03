@@ -17,4 +17,5 @@
    (:file "package")
    (:file "library")
    (:file "autowrap")
-   (:file "nanomsg")))
+   (:file "nanomsg")
+   (:file "documentation")))
