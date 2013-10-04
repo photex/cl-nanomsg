@@ -13,13 +13,13 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; utils
 
-(defmacro domain-constant (domain)
+(defun domain-constant (domain)
   (case domain
     (:sp nanomsg-ffi:+af-sp+)
     (:sp-raw nanomsg-ffi:+af-sp-raw+)
     (t -1)))
 
-(defmacro protocol-constant (protocol)
+(defun protocol-constant (protocol)
   (case protocol
     (:pub nanomsg-ffi:+nn-pub+)
     (:sub nanomsg-ffi:+nn-sub+)
@@ -33,14 +33,14 @@
     (:bus nanomsg-ffi:+nn-bus+)
     (t -1)))
 
-(defmacro transport-constant (transport)
+(defun transport-constant (transport)
   (case transport
     (:tcp nanomsg-ffi:+nn-tcp+)
     (:inproc nanomsg-ffi:+nn-inproc+)
     (:ipc nanomsg-ffi:+nn-ipc+)
     (t -1)))
 
-(defmacro sockopt-constant (option)
+(defun sockopt-constant (option)
   (case option
     ;; :sol-socket options
     (:linger nanomsg-ffi:+nn-linger+)
@@ -69,7 +69,7 @@
     (:unsubscribe :string)
     (t :int)))
 
-(defmacro sockopt-level-constant (level)
+(defun sockopt-level-constant (level)
   (with-gensyms (result)
     `(let ((,result (case ,level
                       (:sol-socket nanomsg-ffi:+nn-sol-socket+)
@@ -96,6 +96,12 @@
 ;; constants
 
 (defconstant +sockaddrmax+ nanomsg-ffi:+nn-sockaddr-max+)
+(defconstant +eagain+ nanomsg-ffi:+eagain+)
+;; NN_MSG == ((size_t) -1)
+;; It's used by recv at least to not limit the size of the msg buffer and
+;; gets you a void* to the data as it comes instead of requiring a copy
+(let ((bit-size (* 8 (cffi:foreign-type-size :pointer))))
+  (defconstant +msg-max-len+ (1- (dpb 1 (byte bit-size bit-size) 0))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; conditions
@@ -121,24 +127,22 @@
 (defmacro term ()
   `(nn-term))
 
-(defmacro make-socket (domain protocol)
-  (with-gensyms (sock d p)
-    `(let ((,d (domain-constant ,domain))
-           (,p (protocol-constant ,protocol)))
-       (when (= ,d -1)
-         (error 'nanomsg-error :msg "Invalid socket domain specified."))
-       (when (= ,p -1)
-         (error 'nanomsg-error :msg "Invalid socket protocol specified."))
-       (let ((,sock (nn-socket ,d ,p)))
-         (unless (>= ,sock 0)
-           (error 'nanomsg-error :msg (strerror (errno))))
-         ,sock))))
+(defun make-socket (domain protocol)
+  (let ((d (domain-constant domain))
+        (p (protocol-constant protocol)))
+    (when (= d -1)
+      (error 'nanomsg-error :msg "Invalid socket domain specified."))
+    (when (= p -1)
+      (error 'nanomsg-error :msg "Invalid socket protocol specified."))
+    (let ((sock (nn-socket d p)))
+      (unless (>= sock 0)
+        (error 'nanomsg-error :msg (strerror (errno))))
+      sock)))
 
-(defmacro close-socket (socket)
-  (with-gensyms (rc)
-    `(let ((,rc (nn-close ,socket)))
-       (unless (= 0 ,rc)
-         (error 'nanomsg-error :msg (strerror (errno)))))))
+(defun close-socket (socket)
+  (let ((rc (nn-close socket)))
+    (unless (= 0 rc)
+      (error 'nanomsg-error :msg (strerror (errno))))))
 
 (defmacro with-sockopt-alloc ((value vname vtype) &body forms)
   (case vtype
@@ -150,37 +154,35 @@
 (defmacro set-socket-option (socket level option value)
   (let* ((val-type (sockopt-type option)))
     (with-gensyms (rc opt lev val len)
-      `(with-sockopt-alloc (,value ,val ,val-type)
-         (setf (mem-ref ,val ,val-type) ,value)
-         (let* ((,len ,(case val-type
-                          (:string (length value))
-                          (:int (foreign-type-size :int))))
-                (,opt (sockopt-constant ,option))
-                (,lev (sockopt-level-constant ,level))
-                (,rc (nn-setsockopt ,socket ,lev ,opt ,val ,len)))
-           (unless (= ,rc 0)
-             (error 'nanomsg-error :msg (strerror (errno)))))))))
+      (with-sockopt-alloc (value val val-type)
+        (setf (mem-ref val val-type) value)
+        (let* ((len (case val-type
+                      (:string (length value))
+                      (:int (foreign-type-size :int))))
+               (opt (sockopt-constant option))
+               (lev (sockopt-level-constant level))
+               (rc (nn-setsockopt socket lev opt val len)))
+          (unless (= rc 0)
+            (error 'nanomsg-error :msg (strerror (errno)))))))))
 
-(defmacro get-socket-option (socket level option)
+(defun get-socket-option (socket level option)
   (let ((val-type (sockopt-type option)))
-    (with-gensyms (rc opt lev val len)
-      `(with-foreign-objects ((,val ,val-type)
-                              (,len :int))
-         ;; TODO until the ability to get string options is implemented
-         ;; in nanomsg itself, we can't really test that aspect of this macro.
-         ;; So far, it appears that integer options are working.
-         ;; Unless I'm mistaken, the only string option you could query
-         ;; is :subscribe and getting options for the :sub protocol
-         ;; isn't implemented as of 0.2-alpha.
-         ,(when (eq val-type :string) `(setf (mem-ref ,len :int) 255))
-         (let* ((,opt (sockopt-constant ,option))
-                (,lev (sockopt-level-constant ,level))
-                (,rc (nn-getsockopt ,socket ,lev ,opt ,val ,len)))
-           (unless (= ,rc 0)
-             (error 'nanomsg-error :msg (strerror (errno))))
-           ,(case val-type
-                  (:string `(cffi:foreign-string-to-lisp ,val))
-                  (t `(mem-ref ,val ,val-type))))))))
+    (with-foreign-objects ((val val-type)
+                           (len :int))
+      ;; TODO until the ability to get string options is implemented
+      ;; in nanomsg itself, we can't really test that aspect of this macro.
+      ;; So far, it appears that integer options are working.
+      ;; Unless I'm mistaken, the only string option you could query
+      ;; is :subscribe and getting options for the :sub protocol
+      ;; isn't implemented as of 0.2-alpha.
+      (when (eq val-type :string)
+        (setf (mem-ref len :int) 255))
+      (let* ((opt (sockopt-constant option))
+             (lev (sockopt-level-constant level))
+             (rc (nn-getsockopt socket lev opt val len)))
+        (unless (= rc 0)
+          (error 'nanomsg-error :msg (strerror (errno))))
+        (mem-ref val val-type)))))
 
 (defmacro %config-endpoint (type socket addr)
   "Calls either bind, connect, or shutdown for a socket and address/endpoint.
@@ -205,8 +207,8 @@ previous bind or connect) otherwise it should be an endpoint address (for exampl
 (defun shutdown (socket eid)
   (%config-endpoint :shutdown socket eid))
 
-(defun alloc-msg (size)
-  (let ((msg (nn-allocmsg size 0)))
+(defun alloc-msg ()
+  (let ((msg (nn-allocmsg 0 0)))
     (when (null-pointer-p msg)
       (error 'nanomsg-error :msg (strerror (errno))))
     msg))
@@ -216,3 +218,40 @@ previous bind or connect) otherwise it should be an endpoint address (for exampl
     (when (< rc 0)
       (error 'nanomsg-error :msg (strerror (errno))))
     rc))
+
+(defun send (socket msg &key dontwait)
+  (let* ((flags (if dontwait 1 0))
+         (bytes-sent (nn-send socket (autowrap:ptr msg) +msg-max-len+ flags)))
+    ;; If bytes-sent == -1 and errno != +eagain+ we raise the error.
+    ;; We return nil when non-blocking mode is requested
+    ;; and the message couldn't be sent yet.
+    ;; Otherwise we return the number of bytes sent.
+    (if (< bytes-sent 0)
+        (let ((errnum (errno)))
+          (unless (and dontwait (= errnum +eagain+))
+            (error 'nanomsg-error :msg (strerror errnum))))
+        bytes-sent)))
+
+(defun recv (socket buf &key dontwait)
+  (let ((flags (if dontwait 1 0)))
+    (let ((bytes-recv (nn-recv socket (autowrap:ptr buf) +msg-max-len+ flags)))
+      (if (< bytes-recv 0)
+          ;; Return nil or raise the error
+          (let ((errnum (errno)))
+            (unless (= errnum +eagain+)
+              (error 'nanomsg-error :msg (strerror errnum))))
+          (mem-ref buf :string)))))
+
+(defun %test-echo (protocol address)
+  (let* ((socket (make-socket :sp protocol))
+         (eid (bind socket address))
+         (buf (alloc-msg)))
+    (format t "Attempting to listen using ~a on ~a.~%" protocol address)
+    (unwind-protect
+         (let ((msg (recv socket buf)))
+           (format t "Received '~a'~%" msg)
+           (send socket buf :dontwait t))
+      (progn
+        (shutdown socket eid)
+        (close-socket socket)
+        (free-msg buf)))))

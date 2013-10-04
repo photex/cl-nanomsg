@@ -15,6 +15,8 @@
            #:strerror
            ;; constants
            #:+sockaddrmax+
+           #:+eagain+
+           #:+msg-max-len+
            ;; api
            #:term
            #:make-socket
@@ -26,4 +28,6 @@
            #:shutdown
            #:alloc-msg
            #:free-msg
+           #:send
+           #:recv
            ))
