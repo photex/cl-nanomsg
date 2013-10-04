@@ -207,8 +207,8 @@ previous bind or connect) otherwise it should be an endpoint address (for exampl
 (defun shutdown (socket eid)
   (%config-endpoint :shutdown socket eid))
 
-(defun alloc-msg ()
-  (let ((msg (nn-allocmsg 0 0)))
+(defun alloc-msg (&optional (size 0))
+  (let ((msg (nn-allocmsg size 0)))
     (when (null-pointer-p msg)
       (error 'nanomsg-error :msg (strerror (errno))))
     msg))
@@ -240,7 +240,7 @@ previous bind or connect) otherwise it should be an endpoint address (for exampl
           (let ((errnum (errno)))
             (unless (= errnum +eagain+)
               (error 'nanomsg-error :msg (strerror errnum))))
-          (mem-ref buf :string)))))
+          bytes-recv))))
 
 (defun %test-echo (protocol address)
   (let* ((socket (make-socket :sp protocol))
@@ -248,8 +248,8 @@ previous bind or connect) otherwise it should be an endpoint address (for exampl
          (buf (alloc-msg)))
     (format t "Attempting to listen using ~a on ~a.~%" protocol address)
     (unwind-protect
-         (let ((msg (recv socket buf)))
-           (format t "Received '~a'~%" msg)
+         (let ((bytes-recv (recv socket buf)))
+           (format t "Received ~a bytes: '~a'~%" bytes-recv (mem-ref buf :string))
            (send socket buf :dontwait t))
       (progn
         (shutdown socket eid)
