@@ -221,7 +221,7 @@ previous bind or connect) otherwise it should be an endpoint address (for exampl
 
 (defun send (socket msg &key dontwait)
   (let* ((flags (if dontwait 1 0))
-         (bytes-sent (nn-send socket (autowrap:ptr msg) +msg-max-len+ flags)))
+         (bytes-sent (nn-send socket msg +msg-max-len+ flags)))
     ;; If bytes-sent == -1 and errno != +eagain+ we raise the error.
     ;; We return nil when non-blocking mode is requested
     ;; and the message couldn't be sent yet.
@@ -234,7 +234,7 @@ previous bind or connect) otherwise it should be an endpoint address (for exampl
 
 (defun recv (socket buf &key dontwait)
   (let ((flags (if dontwait 1 0)))
-    (let ((bytes-recv (nn-recv socket (autowrap:ptr buf) +msg-max-len+ flags)))
+    (let ((bytes-recv (nn-recv socket buf +msg-max-len+ flags)))
       (if (< bytes-recv 0)
           ;; Return nil or raise the error
           (let ((errnum (errno)))
